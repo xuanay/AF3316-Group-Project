@@ -1,0 +1,202 @@
+#python code is used. The code below doesn't necessarily output correct result, some manual modification is adopted in excel.
+###################################################################################################
+import yfinance as yf
+import pandas as pd
+
+tickers = []
+
+start_date = '2023-07-4'
+end_date = '2023-07-18'
+
+data = yf.download(tickers, start=start_date, end=end_date)['Close']
+
+data.sort_index(inplace=True)
+
+returns = data.pct_change().dropna()
+
+output_file = 'stock_returns_event_window.xlsx'
+returns.to_excel(output_file, sheet_name='Returns')
+
+print("returns:")
+print(returns)
+###################################################################################################
+import yfinance as yf
+import pandas as pd
+
+start_date = '2020-10-01'
+end_date = '2024-12-31'
+
+tickers = [] 
+
+data = yf.download(tickers, start=start_date, end=end_date)['Close']
+
+if isinstance(data, pd.Series):
+    data = data.to_frame()
+
+monthly_data = data.resample('M').last()
+
+monthly_return = monthly_data.pct_change()
+
+monthly_return = monthly_return.loc['2020-11-30':'2024-12-31']
+
+monthly_return.index = monthly_return.index.strftime('%Y%m')
+
+monthly_return.to_excel('monthly_returns.xlsx', sheet_name='Monthly Returns')
+
+print("Doneeeee")
+###################################################################################################
+
+import yfinance as yf
+import pandas as pd
+from datetime import datetime, timedelta
+
+def get_exact_market_caps(tickers, year, month):
+    data = []
+    month_start = f"{year}-{month:02d}-01"
+    month_end = (pd.Timestamp(month_start) + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d")
+    
+    for ticker in tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            
+            start_date = (pd.Timestamp(month_start) - timedelta(days=7)).strftime("%Y-%m-%d")
+            end_date = (pd.Timestamp(month_end) + timedelta(days=3)).strftime("%Y-%m-%d")
+            hist = stock.history(start=start_date, end=end_date)
+            
+            month_mask = (hist.index.year == year) & (hist.index.month == month)
+            month_data = hist.loc[month_mask]
+            
+            if month_data.empty:
+                print(f"{ticker}: {year}-{month:02d} 无交易数据")
+                continue
+                
+            last_trading_day = month_data.index[-1]
+            price = month_data['Close'].iloc[-1]
+            
+            shares_info = stock.info
+            shares_outstanding = shares_info.get('sharesOutstanding', shares_info.get('floatShares'))
+            if not shares_outstanding:
+                print(f"{ticker}: 流通股数不可用")
+                continue
+                
+            market_cap = price * shares_outstanding
+            
+            data.append({
+                '股票代码': ticker,
+                '最后交易日': last_trading_day.strftime("%Y-%m-%d"),
+                '收盘价(USD)': price,
+                '流通股数': shares_outstanding,
+                '市值(美元)': market_cap
+            })
+            
+        except Exception as e:
+            print(f"处理 {ticker} 时出错: {type(e).__name__} - {str(e)}")
+    
+    return pd.DataFrame(data)
+
+if __name__ == "__main__":
+    stock_list = ['2357.TW','EA','HAS','2498.TW','3293.TWO',
+           '9766.T','MTG-A.ST','300315.SZ','PARA','263750.KQ','ROKU',
+           'TTWO','TBCH','U','AMC','7832.T','192080.KS','3765.T','603444.SS'
+           ,'293490.KQ','LGF-A','0777.HK','7974.T','PERI','PINS','9684.T','TTEK',
+           'DIS','002354.SZ']
+    target_year = 2020
+    target_month = 10
+    
+    df = get_exact_market_caps(stock_list, target_year, target_month)
+
+    if not df.empty:
+        excel_filename = f"股票市值_{target_year}年{target_month}月.xlsx"
+        
+        with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='123321')
+            
+            worksheet = writer.sheets['123321']
+            
+            number_format = '0.00' 
+            for col in ['D', 'E']: 
+                for cell in worksheet[col]:
+                    cell.number_format = '#,##0'
+
+            worksheet.column_dimensions['A'].width = 12
+            worksheet.column_dimensions['B'].width = 15
+            worksheet.column_dimensions['C'].width = 14
+            worksheet.column_dimensions['D'].width = 18
+            worksheet.column_dimensions['E'].width = 22
+        
+        print(f"\n生成文件：{excel_filename}")
+        print(df)
+    else:
+        print("所有股票数据获取失败")
+
+###################################################################################################
+import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
+
+RISK_FREE_RATE = 0.02 
+DATA_PATH = "/Users/lexuanxi/Desktop/11111.xlsx"
+
+
+def main():
+    returns = pd.read_excel(DATA_PATH, 
+                          sheet_name='Sheet1',
+                          index_col=0)
+    
+    try:
+        returns.index = pd.to_datetime(returns.index, format='%Y%m')
+    except:
+        pass
+
+    print("数据样例：")
+    print(returns.head())
+    print("\n股票代码列表：", returns.columns.tolist())
+
+    mean_returns = returns.mean() * 12  
+    cov_matrix = returns.cov() * 12 
+
+    def sharpe_ratio(weights):
+        port_return = np.dot(weights, mean_returns)
+        port_vol = np.sqrt(weights.T @ cov_matrix @ weights)
+        return (port_return - RISK_FREE_RATE) / port_vol
+
+    def objective(weights):
+        return -sharpe_ratio(weights)
+
+    constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+    bounds = tuple((0, 1) for _ in range(len(mean_returns)))
+    init_guess = [1/len(mean_returns)] * len(mean_returns)
+
+    result = minimize(objective, 
+                      init_guess,
+                      method='SLSQP',
+                      bounds=bounds,
+                      constraints=constraints)
+
+    optimal_weights = np.round(result.x, 4)
+    portfolio_return = np.round(np.dot(optimal_weights, mean_returns), 4)
+    portfolio_vol = np.round(np.sqrt(optimal_weights.T @ cov_matrix @ optimal_weights), 4)
+    sharpe = np.round(-result.fun, 4)
+
+    weights_df = pd.DataFrame({
+        'tickers': returns.columns,
+        'weights': optimal_weights
+    }).sort_values('weights', ascending=False)
+
+    metrics_df = pd.DataFrame({
+        'performance': ['return', 'sd', 'SharpeRatio'],
+        'value': [portfolio_return, portfolio_vol, sharpe]
+    })
+
+    with pd.ExcelWriter('output.xlsx') as writer:
+        weights_df.to_excel(writer, sheet_name='weightssss', index=False)
+        metrics_df.to_excel(writer, sheet_name='performance', index=False)
+    
+    print("\noutput.xlsx")
+    print("weightssss：")
+    print(weights_df)
+    print("\nperformance")
+    print(metrics_df)
+
+if __name__ == "__main__":
+    main()
